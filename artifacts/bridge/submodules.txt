@@ -1,0 +1,7 @@
+ bb98a87da76cb74903b3496914414179a5e1ccb4 Firmware/ESP32_Blueretro (heads/master)
+ d17f8efe9e6ee266d0b818634ca0ac256825579f Firmware/external/Pico-PIO-USB (d17f8ef)
+ 2152d0b7aba0b7cf5f54146e56b21c35dbb87024 Firmware/external/bluepad32 (4.1.0)
+ d308e466e1a09118d03f677c52e5fbf402f6fdd0 Firmware/external/libfixmath (d308e46)
+ cb22301f91f0465a5578be35d9be284657ddd31d Firmware/external/tinyusb (0.17.0-236-gcb22301f9)
+ bd2a47e8df12d0e2ddb34e0a6246d4176e24c102 Tools/dump-dvd-kit (heads/master)
+ 4b58b0817b2dce1f2d269fea9ea1257d56d8fcba WebApp (heads/master)

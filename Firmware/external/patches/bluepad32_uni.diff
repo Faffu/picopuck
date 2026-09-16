@@ -1,0 +1,185 @@
+diff --git a/src/components/bluepad32/include/uni.h b/src/components/bluepad32/include/uni.h
+index 45b24a2..09e323a 100644
+--- a/src/components/bluepad32/include/uni.h
++++ b/src/components/bluepad32/include/uni.h
+@@ -35,6 +35,13 @@ extern "C" {
+ #include "parser/uni_hid_parser_keyboard.h"
+ #include "parser/uni_hid_parser_mouse.h"
+ #include "parser/uni_hid_parser_xboxone.h"
++#include "parser/uni_hid_parser_ds4.h"
++#include "parser/uni_hid_parser_ds3.h"
++#include "parser/uni_hid_parser_switch.h"
++#include "parser/uni_hid_parser_stadia.h"
++#include "parser/uni_hid_parser_psmove.h"
++#include "parser/uni_hid_parser_xboxone.h"
++#include "parser/uni_hid_parser_wii.h"
+ #include "platform/uni_platform.h"
+ #include "uni_circular_buffer.h"
+ #include "uni_console.h"
+diff --git a/src/components/bluepad32/include/parser/uni_hid_parser_steam.h b/src/components/bluepad32/include/parser/uni_hid_parser_steam.h
+index 46cc5c7..17e2b74 100644
+--- a/src/components/bluepad32/include/parser/uni_hid_parser_steam.h
++++ b/src/components/bluepad32/include/parser/uni_hid_parser_steam.h
+@@ -13,5 +13,9 @@
+ void uni_hid_parser_steam_setup(struct uni_hid_device_s* d);
+ void uni_hid_parser_steam_init_report(struct uni_hid_device_s* d);
+ void uni_hid_parser_steam_parse_input_report(struct uni_hid_device_s* d, const uint8_t* report, uint16_t len);
++void uni_hid_parser_steam_play_dual_rumble(struct uni_hid_device_s* d,
++                                           uint16_t duration_ms,
++                                           uint8_t amplitude_left,
++                                           uint8_t amplitude_right);
+ 
+ #endif  // UNI_HID_PARSER_STEAM_H
+diff --git a/src/components/bluepad32/parser/uni_hid_parser_steam.c b/src/components/bluepad32/parser/uni_hid_parser_steam.c
+index fd0da7c..29ace2e 100644
+--- a/src/components/bluepad32/parser/uni_hid_parser_steam.c
++++ b/src/components/bluepad32/parser/uni_hid_parser_steam.c
+@@ -82,7 +82,7 @@ static uint8_t cmd_clear_mappings[] = {
+ static uint8_t cmd_disable_lizard[] = {
+ 	0xc0, STEAM_CMD_WRITE_REGISTER,    // Command
+ 	0x0f,                              // Command Len
+-	STEAM_REG_GYRO_MODE,   0x00, 0x00, // Disable gyro/accel
++	STEAM_REG_GYRO_MODE,   0x18, 0x00, // OGX-Mini: accel + gyro reporting on
+ 	STEAM_REG_LPAD_MODE,   0x07, 0x00, // Disable cursor
+ 	STEAM_REG_RPAD_MODE,   0x07, 0x00, // Disable mouse
+ 	STEAM_REG_RPAD_MARGIN, 0x00, 0x00, // No margin
+@@ -220,9 +220,16 @@ void uni_hid_parser_steam_init_report(uni_hid_device_t* d) {
+     // memset(ctl, 0, sizeof(*ctl));
+ }
+ 
++//OGX-Mini: the Steam Controller 2 decoder gets first refusal on every report,
++//it returns false for anything it can't decode and the original parser runs.
++extern bool ogxm_steam_parse_input_report(struct uni_hid_device_s* d, const uint8_t* report, uint16_t len);
++
+ void uni_hid_parser_steam_parse_input_report(struct uni_hid_device_s* d, const uint8_t* report, uint16_t len) {
+     int idx;
+ 
++    if (ogxm_steam_parse_input_report(d, report, len))
++        return;
++
+     // Sanity checks
+     if (len != 20) {
+         logi("Steam: Inport report with unsupported length: %d\n", len);
+@@ -271,6 +278,33 @@ void uni_hid_parser_steam_parse_input_report(struct uni_hid_device_s* d, const u
+     }
+ }
+ 
++//OGX-Mini: haptic rumble over the report characteristic.
++//The payload mirrors hid-steam's STEAM_CMD_HAPTIC_RUMBLE. UNVERIFIED on the
++//Steam Controller 2, confirm the gain/intensity ranges against real hardware.
++void uni_hid_parser_steam_play_dual_rumble(struct uni_hid_device_s* d,
++                                           uint16_t duration_ms,
++                                           uint8_t amplitude_left,
++                                           uint8_t amplitude_right) {
++    ARG_UNUSED(duration_ms);
++
++    if (d != device || le_steam_characteristic_report.value_handle == 0)
++        return;
++
++    uint16_t intensity_l = (uint16_t)amplitude_left << 7;
++    uint16_t intensity_r = (uint16_t)amplitude_right << 7;
++
++    uint8_t cmd[] = {
++        0xc0, STEAM_CMD_HAPTIC_RUMBLE, 0x09,
++        intensity_l & 0xff, intensity_l >> 8,
++        intensity_r & 0xff, intensity_r >> 8,
++        0x00, 0x00,
++        amplitude_left, amplitude_right,
++    };
++
++    gatt_client_write_value_of_characteristic_without_response(
++        connection_handle, le_steam_characteristic_report.value_handle, sizeof(cmd), cmd);
++}
++
+ static void parse_buttons(struct uni_hid_device_s* d, const uint8_t* data) {
+     uni_controller_t* ctl = &d->controller;
+ 
+diff --git a/src/components/bluepad32/bt/uni_bt_le.c b/src/components/bluepad32/bt/uni_bt_le.c
+--- a/src/components/bluepad32/bt/uni_bt_le.c
++++ b/src/components/bluepad32/bt/uni_bt_le.c
+@@ -734,7 +734,24 @@
+     }
+ }
+ 
++//OGX-Mini: sees every advertising report first, the capture build logs them.
++extern void ogxm_adv_report_hook(const uint8_t* packet);
++
++//OGX-Mini: true when addr is a bonded LE device.
++static bool is_bonded_le_address(bd_addr_type_t addr_type, const bd_addr_t addr) {
++    for (int i = 0; i < le_device_db_max_count(); i++) {
++        int entry_type = (int)BD_ADDR_TYPE_UNKNOWN;
++        bd_addr_t entry_addr;
++        le_device_db_info(i, &entry_type, entry_addr, NULL);
++        if (entry_type == (int)addr_type && memcmp(entry_addr, addr, BD_ADDR_LEN) == 0)
++            return true;
++    }
++    return false;
++}
++
+ void uni_bt_le_on_gap_event_advertising_report(const uint8_t* packet, uint16_t size) {
++    ogxm_adv_report_hook(packet);
++
+     bd_addr_t addr;
+     bd_addr_type_t addr_type;
+     uint16_t appearance;
+@@ -755,6 +772,20 @@
+ 
+     adv_event_get_data(packet, &appearance, name);
+ 
++    // OGX-Mini: a bonded controller coming back advertises without an appearance:
++    // directed advertising with no data, or undirected advertising that is not
++    // discoverable (Steam Controller 2). Reconnect to it as a gamepad; the parser
++    // is still picked from its VID/PID once connected.
++    {
++        uint8_t event_type = gap_event_advertising_report_get_advertising_event_type(packet);
++        bd_addr_type_t adv_addr_type = (bd_addr_type_t)gap_event_advertising_report_get_address_type(packet);
++        if (appearance == 0 && (event_type == 0 /* ADV_IND */ || event_type == 1 /* ADV_DIRECT_IND */) &&
++            is_bonded_le_address(adv_addr_type, addr)) {
++            logi("Bonded device %s advertising, reconnecting\n", bd_addr_to_str(addr));
++            appearance = UNI_BT_HID_APPEARANCE_GAMEPAD;
++        }
++    }
++
+     if (appearance != UNI_BT_HID_APPEARANCE_GAMEPAD && appearance != UNI_BT_HID_APPEARANCE_JOYSTICK &&
+         appearance != UNI_BT_HID_APPEARANCE_MOUSE && appearance != UNI_BT_HID_APPEARANCE_KEYBOARD) {
+         // Don't log it. There too many devices advertising themselves.
+@@ -882,7 +913,9 @@
+     // - Xbox 2 buttons: flaky, fails to connect or connects
+     // sm_set_authentication_requirements(0);
+ 
+-    sm_set_authentication_requirements(SM_AUTHREQ_BONDING);
++    // Steam Controller 2 rejects legacy pairing with reason 3 (authentication
++    // requirements); peers without Secure Connections still fall back to legacy.
++    sm_set_authentication_requirements(SM_AUTHREQ_SECURE_CONNECTION | SM_AUTHREQ_BONDING);
+ 
+     // Secure connection + NO bonding in ESP32:
+     // - Stadia: Ok
+@@ -908,7 +941,8 @@
+     // scan_parameters_service_client_init();
+     device_information_service_client_init();
+ 
+-    gap_set_scan_parameters(0 /* type: passive */, 48 /* interval */, 48 /* window */);
++    // Active: controllers may carry their appearance in the scan response only.
++    gap_set_scan_parameters(1 /* type: active */, 48 /* interval */, 48 /* window */);
+ }
+ 
+ void uni_bt_le_scan_start(void) {
+diff --git a/src/components/bluepad32/parser/uni_hid_parser.c b/src/components/bluepad32/parser/uni_hid_parser.c
+--- a/src/components/bluepad32/parser/uni_hid_parser.c
++++ b/src/components/bluepad32/parser/uni_hid_parser.c
+@@ -11,9 +11,15 @@
+ // HID Usage Tables:
+ // https://www.usb.org/sites/default/files/documents/hut1_12v2.pdf
+ 
++//OGX-Mini: sees every report first, for capture and for controllers it decodes itself.
++extern bool ogxm_input_report_hook(struct uni_hid_device_s* d, const uint8_t* report, uint16_t len);
++
+ void uni_hid_parse_input_report(struct uni_hid_device_s* d, const uint8_t* report, uint16_t report_len) {
+     btstack_hid_parser_t parser;
+ 
++    if (ogxm_input_report_hook(d, report, report_len))
++        return;
++
+     uni_report_parser_t* rp = &d->report_parser;
+ 
+     //    printf_hexdump(report, report_len);

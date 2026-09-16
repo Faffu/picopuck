@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get install -y cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib g++
+
+      - name: Host tests
+        run: ./Tools/pico-bridge/run_tests.sh
+
+      - name: Firmware
+        run: ./Tools/pico-bridge/build.sh build/bridge
+
+      - name: Capture firmware
+        run: ./Tools/pico-bridge/build.sh build/capture -DOGXM_FORCE_CAPTURE=ON
+
+      - name: Collect
+        run: |
+          mkdir -p output
+          cp build/bridge/*.uf2 output/picopuck-PI_PICO2W.uf2
+          cp build/capture/*.uf2 output/picopuck-capture-PI_PICO2W.uf2
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: picopuck-uf2
+          path: output/*.uf2

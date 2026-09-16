@@ -1,0 +1,1 @@
+535d40c3b8f5d52446fe8ea1d4bf62794bceb1f5513c8aac28d76d3a5def5643  artifacts/baseline/OGX-Mini-v1.0.0a3-PI_PICO2W.uf2
