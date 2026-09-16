@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
@@ -28,11 +29,42 @@ jobs:
 
       - name: Collect
         run: |
+          # Tags name the files after the version, other builds after the commit.
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then VERSION="$GITHUB_REF_NAME"; else VERSION="${GITHUB_SHA::8}"; fi
           mkdir -p output
-          cp build/bridge/*.uf2 output/picopuck-PI_PICO2W.uf2
-          cp build/capture/*.uf2 output/picopuck-capture-PI_PICO2W.uf2
+          cp build/bridge/*.uf2 "output/picopuck-${VERSION}-PI_PICO2W.uf2"
+          cp build/capture/*.uf2 "output/picopuck-capture-${VERSION}-PI_PICO2W.uf2"
+          (cd output && sha256sum *.uf2 > SHA256SUMS.txt)
 
       - uses: actions/upload-artifact@v4
         with:
           name: picopuck-uf2
-          path: output/*.uf2
+          path: output/*
+
+  # Pushing a tag like v0.2.0 publishes a release with the firmware attached.
+  # Tags with a suffix (v0.2.0-rc1) are published as pre-releases.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: picopuck-uf2
+          path: output
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FLAGS=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then FLAGS+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" output/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "PicoPuck $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag \
+            "${FLAGS[@]}"

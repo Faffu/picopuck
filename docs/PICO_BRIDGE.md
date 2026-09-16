@@ -97,6 +97,22 @@ changes on every build. `artifacts/bridge/` holds the firmware with its
 checksum, `artifacts/capture/` the capture build, `artifacts/baseline/` the
 unmodified OGX-Mini build.
 
+## Releases
+
+GitHub Actions builds the firmware and the capture firmware on every push and
+pull request, after the host tests, and keeps the `.uf2` files as a workflow
+artifact. Pushing a version tag also publishes a GitHub release with both files
+and their checksums attached and notes generated from the commits:
+
+```
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+A tag with a suffix, such as `v0.2.0-rc1`, is published as a pre-release.
+Prebuilt firmware for users lives in the releases; `artifacts/` holds the
+builds kept in the repository.
+
 ## Flash
 
 Hold BOOTSEL while plugging the Pico 2 W in, then copy the `.uf2` to the
